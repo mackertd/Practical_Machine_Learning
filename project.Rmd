@@ -1,0 +1,203 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Donald Mackert"
+date: "September 27, 2015"
+output: html_document
+---
+
+##1. Project Task and Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Data set). 
+
+##2. Data Acquistion
+
+The training and test data sets were partitioned by the instructors and made available to the students at the links below.
+
+The training data set for this project is available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data set is available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project comes from: http://groupware.les.inf.puc-rio.br/har. 
+
+Load the libraries to setup the environment to include the parallel processing libraries.
+
+```{r, warning = FALSE, message = FALSE}
+library(caret)
+library(dplyr)
+library(doMC)
+
+registerDoMC(cores = 3)
+```
+
+Set the seed for reproducibility
+
+```{r}
+set.seed(45876)
+```
+
+
+Retrieve and load the training and test data sets
+```{r}
+trainLink <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testLink <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+trainData <- read.csv(url(trainLink))
+testData <- read.csv(url(testLink))
+```
+
+##3. Explore The Data
+
+Initial exploration of the data shows a number of variables that appear to have a large of number of NA's. There are 19622 total observations of 160 variables within the training data set. The first 20 variables are show here as an example.
+
+```{r}
+str(trainData, list.len = 20)
+```
+
+Per the site http://groupware.les.inf.puc-rio.br/har#dataset the activities that were measured were (sitting-down, standing-up, standing, walking, and sitting).  An examination of the data on the Human Activity Recognition (HAR) site shows that these map to A, B, C, D, and E respectively in the Coursera provided data sets.
+
+###Clean The Data
+
+The data set has 67 variables that have 19216 of 19622 values set to NA.  The majority of the variables with a high number of NA values dealt with the pitch, roll, and yaw of the various body positions. These NA columns have been removed from the data set which reduced the data set to 93 variables.
+
+```{r}
+colNAS <- colSums(is.na(trainData))
+nonNACols <- colNAS[colNAS == 0]
+colNames <- names(nonNACols)
+
+trainDataExtract <- trainData[,colNames]
+
+str(trainDataExtract, list.len = 10)
+```
+
+The X variable was removed from both data sets as it is a row count for the data and does not provide any value as a predictor.
+```{r}
+trainDataExtract$X <- NULL
+testData$X <- NULL
+```
+
+The data set was then tested for Near Zero Variance (NZV) variables.  An additional 34 variables were removed from the data set.  Each of these variables dealt with the roll, pitch, and yaw of various sensors had 2% or less uniqueness to the variable.  This reduced the data set to 59 variables.
+
+```{r}
+nsvExtract <- nearZeroVar(trainDataExtract)
+
+trainDataFinal <- trainDataExtract[, -nsvExtract]
+```
+
+The following histogram shows that the majority of the exercises were conducted while they were sitting down within the test data set.
+
+```{r}
+plot01 <- ggplot(trainDataFinal) + 
+            geom_histogram(aes(x = classe, fill= classe)) +
+            ggtitle("Training Data Set - Exercise Classes") +
+            scale_x_discrete(labels = c("Sitting Down", "Standing Up", "Standing", "Walking", "Sitting")) +
+            xlab("Exercise Class") +
+            ylab("Count") +
+            scale_fill_discrete(name="Exercise Class", labels=c("Sitting Down", "Standing Up", "Standing", "Walking", "Sitting"))
+
+print(plot01)
+```
+
+##4. Fit And Train The Model
+
+The Decision Tree and Random Forest models were selected to evaluate the test data set with. Each model was tested with kfold cross validated with using five folds.  Additionally, the allow parallel flag was set to true to utilize the parallel processing capabilities.
+
+Note: The training and test data sets we split by the Coursera Staff.
+
+```{r}
+trainCTRL <- trainControl(method = "cv", number = 5, allowParallel = TRUE)
+```
+
+The Decision Tree Model and the Random Forest Model were trained with the training data set.  Each model that was fit is stored on disk after it is created to reduce the processing times for subsequent runs of the tests.
+
+```{r}
+# Train the Decision Tree Model
+
+if(file.exists("decision_tree_train.RData")) {
+      
+      load("decision_tree_train.RData")
+      
+} else {
+      
+      modelDTFit <- train(classe ~ ., data = trainDataFinal, method = "rpart", trControl = trainCTRL)
+      save(modelDTFit, file = "decision_tree_train.RData")
+}
+
+# Train the Random Forest Model
+
+if(file.exists("random_forest_train.RData")) {
+      
+      load("random_forest_train.RData")
+      
+} else {
+      
+      modelRFFit <- train(classe ~ ., data = trainDataFinal, method = "rf", trControl = trainCTRL)
+      save(modelRFFit, file = "random_forest_train.RData")
+}
+```
+
+##5. Model Selection and Evaluation
+
+A confusion matrix was created for each model after it was trained.  The Decision Tree model provided a 66.17% accuracy rate and the Random Forest model provided a near 100% accuracy rate.  The Decision Tree model also placed Standing, Walking, and Sitting exercise classes into the sitting class.  Based on this information the Random Forest Model was selected for use with the test data set.
+
+```{r, warning = FALSE, message = FALSE}
+dtResult <- predict(modelDTFit, trainDataFinal, type = "raw")
+
+dtMatrix <- confusionMatrix(dtResult, trainDataFinal$classe )
+
+rfResult <- predict(modelRFFit, trainDataFinal, type = "raw")
+
+rfMatrix <- confusionMatrix(rfResult, trainDataFinal$classe )
+```
+
+Decision Tree Confusion Matrix
+
+```{r}
+dtMatrix
+```
+
+Random Forest Confusion Matrix
+
+```{r}
+rfMatrix
+```
+
+#6. Produce The Output With The Test Data Set
+
+The model selected was than applied to the test set using pre-partitioned data set provided by the Coursera team.
+
+```{r}
+testResult <- predict(modelRFFit, testData)
+```
+
+###Create The Data Files For Submissions
+
+The pml_write_files function create 20 test case files to be submitted to the Coursera site.
+
+Note: The pml_write_files function was supplied as part of the project instructions.
+
+```{r}
+pml_write_files = function(x) {
+      
+      n = length(x)
+      
+      for(i in 1:n) {
+            
+            filename = paste0("problem_id_",i,".txt")
+            write.table(x[i],file = filename, quote = FALSE, row.names = FALSE, col.names = FALSE)
+            
+      }
+      
+}
+
+results <- as.character(testResult)
+
+pml_write_files(results)
+
+results
+```
